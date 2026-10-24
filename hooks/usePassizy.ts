@@ -6,6 +6,7 @@ import type { PassizySDK, StudentProfile, LaunchContext } from '@/types/passizy'
 export function usePassizy() {
   const [session, setSession] = useState<LaunchContext | null>(null);
   const [student, setStudent] = useState<StudentProfile | null>(null);
+  const [startParam, setStartParam] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const isMounted = useRef<boolean>(true);
 
@@ -57,6 +58,26 @@ export function usePassizy() {
 
         if (isMounted.current) {
           setSession(ctx);
+          // Extract startParam from session context or URL query
+          const initialParam =
+            ctx.startParam ||
+            (typeof window !== 'undefined'
+              ? new URLSearchParams(window.location.search).get('startapp') ||
+                new URLSearchParams(window.location.search).get('start_param')
+              : null);
+          if (initialParam) {
+            setStartParam(initialParam);
+          }
+
+          // Subscribe to live in-app deep links without iframe reload
+          if (typeof sdk.onDeepLink === 'function') {
+            sdk.onDeepLink((param) => {
+              if (isMounted.current && param) {
+                setStartParam(param);
+              }
+            });
+          }
+
           // Only provide student profile if running embedded in real Passizy app (zero mock data)
           const isRealEmbedded = typeof sdk.isEmbedded === 'function' ? sdk.isEmbedded() : false;
           setStudent(isRealEmbedded ? ctx.student : null);
@@ -120,12 +141,55 @@ export function usePassizy() {
     };
   }, []);
 
+  const getShareUrl = useCallback(
+    (options?: { startParam?: string }) => {
+      if (typeof window !== 'undefined' && window.Passizy?.getShareUrl) {
+        return window.Passizy.getShareUrl(options);
+      }
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      const param = options?.startParam || startParam;
+      return param ? `${origin}?startapp=${encodeURIComponent(param)}` : origin;
+    },
+    [startParam]
+  );
+
+  const share = useCallback(
+    async (options?: { startParam?: string; title?: string; text?: string; url?: string }) => {
+      if (typeof window !== 'undefined' && window.Passizy?.share) {
+        return window.Passizy.share(options);
+      }
+      // Fallback
+      const shareUrl = options?.url || getShareUrl(options);
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        try {
+          await navigator.share({
+            title: options?.title || 'Jigsaw Atelier on Passizy',
+            text: options?.text || 'Play Jigsaw Atelier on Passizy',
+            url: shareUrl,
+          });
+          return true;
+        } catch (e: any) {
+          if (e?.name === 'AbortError') return false;
+        }
+      }
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(shareUrl);
+        return true;
+      }
+      return false;
+    },
+    [getShareUrl]
+  );
+
   return {
     session,
     student,
+    startParam,
     isInitialized,
     triggerHaptic,
     setHeaderTitle,
     setupBackButton,
+    getShareUrl,
+    share,
   };
 }

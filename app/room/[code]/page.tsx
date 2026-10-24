@@ -44,7 +44,7 @@ function MultiplayerRoomContent() {
   const rawCode = params?.code;
   const roomCode = typeof rawCode === 'string' ? rawCode.toUpperCase() : 'LOBBY';
 
-  const { student, triggerHaptic } = usePassizy();
+  const { student, triggerHaptic, share } = usePassizy();
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [roomState, setRoomState] = useState<MultiplayerRoomState | null>(null);
@@ -726,11 +726,14 @@ function MultiplayerRoomContent() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleCopyLink = () => {
-    const link = typeof window !== 'undefined' ? window.location.href : '';
-    navigator.clipboard.writeText(link);
-    setCopiedLink(true);
+  const handleCopyLink = async () => {
     triggerHaptic('light');
+    await share({
+      startParam: `room_${roomCode}`,
+      title: `Play Jigsaw Atelier Room #${roomCode}`,
+      text: `Join my puzzle duel in room #${roomCode} on Passizy!`,
+    });
+    setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
 

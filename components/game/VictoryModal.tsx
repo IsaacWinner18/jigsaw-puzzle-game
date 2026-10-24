@@ -2,8 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import confetti from 'canvas-confetti';
-import { Clock, RotateCcw, ArrowRight, Star, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Clock, RotateCcw, ArrowRight, Star, Sparkles, CheckCircle2, Share2, Check } from 'lucide-react';
 import { sound } from '@/lib/audio';
+import { usePassizy } from '@/hooks/usePassizy';
 import { PuzzleLevel } from '@/types/puzzle';
 import {
   Dialog,
@@ -36,6 +37,21 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
   hasNextLevel,
 }) => {
   const [revealedStars, setRevealedStars] = useState<number>(0);
+  const { share, triggerHaptic } = usePassizy();
+  const [copiedShare, setCopiedShare] = useState(false);
+
+  const handleShare = async () => {
+    triggerHaptic('light');
+    const levelTitle = currentLevel?.title || 'a puzzle';
+    const levelParam = currentLevel ? `level_${currentLevel.id}` : 'solo';
+    await share({
+      startParam: levelParam,
+      title: `Solved ${levelTitle} in ${formatTime(timeElapsed)}!`,
+      text: `I just completed ${levelTitle} on Jigsaw Atelier in ${formatTime(timeElapsed)}! Can you beat my time?`,
+    });
+    setCopiedShare(true);
+    setTimeout(() => setCopiedShare(false), 2000);
+  };
 
   useEffect(() => {
     sound.playVictory();
@@ -161,6 +177,24 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
               <ArrowRight className="w-4 h-4" />
             </Button>
           )}
+
+          <Button
+            variant="outline"
+            onClick={handleShare}
+            className="w-full gap-2 py-2.5 border-slate-700 hover:border-amber-400 text-slate-200"
+          >
+            {copiedShare ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Link Copied!</span>
+              </>
+            ) : (
+              <>
+                <Share2 className="w-3.5 h-3.5 text-amber-400" />
+                <span>Share Victory</span>
+              </>
+            )}
+          </Button>
 
           <div className="flex items-center gap-2">
             <Button

@@ -13,12 +13,23 @@ import { getPlayerProfile, savePlayerName } from '@/lib/playerProfile';
 
 export default function MultiplayerSetupPage() {
   const router = useRouter();
-  const { student, triggerHaptic } = usePassizy();
+  const { student, triggerHaptic, startParam } = usePassizy();
   const [selectedPuzzle, setSelectedPuzzle] = useState<MultiplayerPuzzleTheme>(MULTIPLAYER_PUZZLES[0]);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [isCreating, setIsCreating] = useState(false);
   const [playerName, setPlayerName] = useState<string>('Challenger');
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-route if deep-linked to a room
+  useEffect(() => {
+    if (!startParam) return;
+    if (startParam.startsWith('room_')) {
+      const code = startParam.replace('room_', '').trim().toUpperCase();
+      if (code) router.replace(`/room/${code}`);
+    } else if (/^[A-Za-z0-9]{4,6}$/.test(startParam)) {
+      router.replace(`/room/${startParam.toUpperCase()}`);
+    }
+  }, [startParam, router]);
 
   useEffect(() => {
     const profile = getPlayerProfile(student);

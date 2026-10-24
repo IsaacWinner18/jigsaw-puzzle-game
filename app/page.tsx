@@ -15,8 +15,31 @@ export default function Home() {
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [inputError, setInputError] = useState('');
   const { totalStars } = useCampaignProgress(CAMPAIGN_LEVELS.length);
-  const { student, triggerHaptic } = usePassizy();
+  const { student, triggerHaptic, startParam } = usePassizy();
   const [playerName, setPlayerName] = useState('Player');
+
+  // Auto-route on deep link (e.g., ?startapp=room_ATEL42, ?startapp=level_3, ?startapp=solo, or direct code ?startapp=W9X2)
+  useEffect(() => {
+    if (!startParam) return;
+
+    if (startParam.startsWith('room_')) {
+      const targetRoom = startParam.replace('room_', '').trim().toUpperCase();
+      if (targetRoom) {
+        router.replace(`/room/${targetRoom}`);
+      }
+    } else if (startParam.startsWith('level_') || startParam.startsWith('solo_')) {
+      const levelId = parseInt(startParam.replace(/^(level_|solo_)/, ''), 10);
+      if (!isNaN(levelId) && levelId >= 1) {
+        router.replace(`/play/${levelId}`);
+      }
+    } else if (startParam === 'solo') {
+      router.replace('/solo');
+    } else if (startParam === 'multiplayer') {
+      router.replace('/multiplayer');
+    } else if (/^[A-Za-z0-9]{4,6}$/.test(startParam)) {
+      router.replace(`/room/${startParam.toUpperCase()}`);
+    }
+  }, [startParam, router]);
 
   useEffect(() => {
     const p = getPlayerProfile(student);

@@ -32,6 +32,15 @@ export interface LaunchContext {
     right: number;
   };
   isExpanded?: boolean;
+  startParam?: string;
+  hostOrigin?: string;
+}
+
+export interface ShareOptions {
+  startParam?: string;
+  title?: string;
+  text?: string;
+  url?: string;
 }
 
 export interface PassizySDK {
@@ -73,6 +82,10 @@ export interface PassizySDK {
     get(): "light" | "dark";
     onChange(cb: (theme: "light" | "dark") => void): () => void;
   };
+  startParam?: string;
+  getShareUrl(options?: { startParam?: string }): string;
+  share(options?: ShareOptions): Promise<boolean>;
+  onDeepLink(cb: (startParam: string) => void): () => void;
   isEmbedded(): boolean;
   init(options?: InitOptions): Promise<LaunchContext>;
   on(event: string, handler: (payload: any) => void): () => void;
