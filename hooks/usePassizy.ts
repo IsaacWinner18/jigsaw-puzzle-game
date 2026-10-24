@@ -194,6 +194,32 @@ export function usePassizy() {
     [getShareUrl]
   );
 
+  const goBack = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined' && window.Passizy?.navigation?.back) {
+        window.Passizy.navigation.back();
+      } else if (typeof window !== 'undefined' && window.history && window.history.length > 1) {
+        window.history.back();
+      }
+    } catch {
+      // Silently ignore
+    }
+  }, []);
+
+  const exit = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined' && window.Passizy?.navigation) {
+        if (typeof window.Passizy.navigation.exit === 'function') {
+          window.Passizy.navigation.exit();
+        } else {
+          window.Passizy.navigation.close();
+        }
+      }
+    } catch {
+      // Silently ignore
+    }
+  }, []);
+
   return {
     session,
     student,
@@ -202,6 +228,9 @@ export function usePassizy() {
     triggerHaptic,
     setHeaderTitle,
     setupBackButton,
+    goBack,
+    back: goBack,
+    exit,
     getShareUrl,
     share,
   };

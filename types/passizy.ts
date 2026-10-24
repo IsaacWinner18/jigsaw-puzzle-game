@@ -55,10 +55,14 @@ export interface PassizySDK {
   navigation: {
     setTitle(title: string): void;
     close(): void;
+    exit?(): void;
+    back?(): void;
+    goBack?(): void;
     backButton: {
       show(): void;
       hide(): void;
       onClick(cb: () => void): () => void;
+      trigger?(): void;
     };
   };
   viewport: {
