@@ -38,6 +38,7 @@ export interface LaunchContext {
 
 export interface ShareOptions {
   startParam?: string;
+  appId?: string;
   title?: string;
   text?: string;
   url?: string;
@@ -62,6 +63,12 @@ export interface PassizySDK {
   };
   viewport: {
     expand(): void;
+    safeArea: {
+      top: number;
+      bottom: number;
+      left: number;
+      right: number;
+    };
     getSafeArea(): {
       top: number;
       bottom: number;
@@ -83,7 +90,7 @@ export interface PassizySDK {
     onChange(cb: (theme: "light" | "dark") => void): () => void;
   };
   startParam?: string;
-  getShareUrl(options?: { startParam?: string }): string;
+  getShareUrl(options?: { startParam?: string; appId?: string }): string;
   share(options?: ShareOptions): Promise<boolean>;
   onDeepLink(cb: (startParam: string) => void): () => void;
   isEmbedded(): boolean;

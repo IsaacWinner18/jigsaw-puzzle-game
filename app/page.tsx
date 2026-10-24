@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Sparkles, Users, User, ArrowRight, Gamepad2, ShieldCheck, Trophy, Hash } from 'lucide-react';
+import { Users, User, ArrowRight, Gamepad2, ShieldCheck, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GenerativeCanvasBackground } from '@/components/game/GenerativeCanvasBackground';
 import { useCampaignProgress } from '@/hooks/useCampaignProgress';

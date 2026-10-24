@@ -17,7 +17,6 @@ import {
   RefreshCw,
   Eye,
   EyeOff,
-  Sparkles,
   AlertTriangle,
   LogOut,
 } from 'lucide-react';

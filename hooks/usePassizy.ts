@@ -6,7 +6,16 @@ import type { PassizySDK, StudentProfile, LaunchContext } from '@/types/passizy'
 export function usePassizy() {
   const [session, setSession] = useState<LaunchContext | null>(null);
   const [student, setStudent] = useState<StudentProfile | null>(null);
-  const [startParam, setStartParam] = useState<string | null>(null);
+  const [startParam, setStartParam] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return (
+        new URLSearchParams(window.location.search).get('startapp') ||
+        new URLSearchParams(window.location.search).get('start_param') ||
+        null
+      );
+    }
+    return null;
+  });
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const isMounted = useRef<boolean>(true);
 
@@ -71,7 +80,7 @@ export function usePassizy() {
 
           // Subscribe to live in-app deep links without iframe reload
           if (typeof sdk.onDeepLink === 'function') {
-            sdk.onDeepLink((param) => {
+            unsubDeepLink = sdk.onDeepLink((param) => {
               if (isMounted.current && param) {
                 setStartParam(param);
               }
@@ -91,10 +100,12 @@ export function usePassizy() {
       }
     }
 
+    let unsubDeepLink: (() => void) | undefined;
     initSDK();
 
     return () => {
       isMounted.current = false;
+      if (unsubDeepLink) unsubDeepLink();
     };
   }, []);
 
@@ -142,29 +153,31 @@ export function usePassizy() {
   }, []);
 
   const getShareUrl = useCallback(
-    (options?: { startParam?: string }) => {
+    (options?: { startParam?: string; appId?: string }) => {
+      const opts = { appId: 'jigsaw', ...options };
       if (typeof window !== 'undefined' && window.Passizy?.getShareUrl) {
-        return window.Passizy.getShareUrl(options);
+        return window.Passizy.getShareUrl(opts);
       }
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      const param = options?.startParam || startParam;
-      return param ? `${origin}?startapp=${encodeURIComponent(param)}` : origin;
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'https://passizy.com';
+      const param = opts.startParam || startParam;
+      return param ? `${origin}/me/games/jigsaw?startapp=${encodeURIComponent(param)}` : `${origin}/me/games/jigsaw`;
     },
     [startParam]
   );
 
   const share = useCallback(
-    async (options?: { startParam?: string; title?: string; text?: string; url?: string }) => {
+    async (options?: { startParam?: string; appId?: string; title?: string; text?: string; url?: string }) => {
+      const opts = { appId: 'jigsaw', ...options };
       if (typeof window !== 'undefined' && window.Passizy?.share) {
-        return window.Passizy.share(options);
+        return window.Passizy.share(opts);
       }
       // Fallback
-      const shareUrl = options?.url || getShareUrl(options);
+      const shareUrl = opts.url || getShareUrl(opts);
       if (typeof navigator !== 'undefined' && navigator.share) {
         try {
           await navigator.share({
-            title: options?.title || 'Jigsaw Atelier on Passizy',
-            text: options?.text || 'Play Jigsaw Atelier on Passizy',
+            title: opts.title || 'Jigsaw Atelier on Passizy',
+            text: opts.text || 'Play Jigsaw Atelier on Passizy',
             url: shareUrl,
           });
           return true;
