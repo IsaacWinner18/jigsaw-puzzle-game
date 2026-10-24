@@ -21,6 +21,15 @@ function PlayGameContent() {
     hideBackButton();
   }, [hideBackButton]);
 
+  // Intercept browser back gesture while playing: return to level map
+  useEffect(() => {
+    const handlePopState = () => {
+      router.replace('/solo');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [router]);
+
   const params = useParams();
   const rawId = params?.id;
   const levelId = typeof rawId === 'string' ? parseInt(rawId, 10) : 1;
@@ -150,7 +159,7 @@ function PlayGameContent() {
     <div className="h-[100dvh] max-h-[100dvh] w-full overflow-hidden fixed inset-0 flex flex-col justify-between bg-slate-950 text-slate-100 font-inter select-none touch-none">
       {/* Top Navigation */}
       <TopNav
-        currentLevel={currentLevel}
+        currentLevel={currentLevel || targetLevel}
         totalStars={totalStars}
         timeElapsed={timeElapsed}
         lockedCount={lockedCount}

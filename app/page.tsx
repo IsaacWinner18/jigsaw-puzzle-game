@@ -29,9 +29,11 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    try {
-      window.history.pushState({ jigsawRoot: true }, '', window.location.href);
-    } catch {}
+    if (!window.history.state?.jigsawRoot) {
+      try {
+        window.history.pushState({ jigsawRoot: true }, '', window.location.href);
+      } catch {}
+    }
 
     const handlePopState = () => {
       exit();

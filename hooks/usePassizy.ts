@@ -3,16 +3,27 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import type { PassizySDK, StudentProfile, LaunchContext } from '@/types/passizy';
 
+function isParamConsumed(param: string | null): boolean {
+  if (!param || typeof window === 'undefined') return false;
+  try {
+    return window.sessionStorage?.getItem(`consumed_param_${param}`) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export function usePassizy() {
   const [session, setSession] = useState<LaunchContext | null>(null);
   const [student, setStudent] = useState<StudentProfile | null>(null);
   const [startParam, setStartParam] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
-      return (
+      const p =
         new URLSearchParams(window.location.search).get('startapp') ||
         new URLSearchParams(window.location.search).get('start_param') ||
-        null
-      );
+        null;
+      if (p && !isParamConsumed(p)) {
+        return p;
+      }
     }
     return null;
   });
@@ -74,7 +85,7 @@ export function usePassizy() {
               ? new URLSearchParams(window.location.search).get('startapp') ||
                 new URLSearchParams(window.location.search).get('start_param')
               : null);
-          if (initialParam) {
+          if (initialParam && !isParamConsumed(initialParam)) {
             setStartParam(initialParam);
           }
 
@@ -130,10 +141,16 @@ export function usePassizy() {
   }, []);
 
   const consumeStartParam = useCallback(() => {
-    setStartParam(null);
     if (typeof window !== 'undefined') {
       try {
+        if (startParam) {
+          window.sessionStorage?.setItem(`consumed_param_${startParam}`, 'true');
+        }
         const url = new URL(window.location.href);
+        const p1 = url.searchParams.get('startapp');
+        const p2 = url.searchParams.get('start_param');
+        if (p1) window.sessionStorage?.setItem(`consumed_param_${p1}`, 'true');
+        if (p2) window.sessionStorage?.setItem(`consumed_param_${p2}`, 'true');
         if (url.searchParams.has('startapp') || url.searchParams.has('start_param')) {
           url.searchParams.delete('startapp');
           url.searchParams.delete('start_param');
@@ -141,7 +158,8 @@ export function usePassizy() {
         }
       } catch {}
     }
-  }, []);
+    setStartParam(null);
+  }, [startParam]);
 
   const hideBackButton = useCallback(() => {
     try {

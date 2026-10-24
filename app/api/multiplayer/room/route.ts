@@ -275,6 +275,8 @@ export async function POST(req: NextRequest) {
       if (capability && capability.playerId !== playerId) {
         return error("You're already connected to this room.", 403);
       }
+      if (room.status === 'closed') return error('This battle room was closed by the host.', 400);
+      if (room.status === 'finished') return error('This battle has already finished.', 400);
       if (room.status !== 'waiting' && !existingPlayer) return error('This match is already in progress.', 403);
       if (!existingPlayer && Object.keys(room.players).length >= 2) return error('This room is full.', 409);
 

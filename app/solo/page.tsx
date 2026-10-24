@@ -18,9 +18,18 @@ export default function SoloCampaignPage() {
     hideBackButton();
   }, [hideBackButton]);
 
+  // Intercept browser back gesture while on level map: return to Home
+  useEffect(() => {
+    const handlePopState = () => {
+      router.replace('/');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [router]);
+
   const handleSelectLevel = (level: PuzzleLevel) => {
     triggerHaptic('light');
-    router.push(`/play/${level.id}`);
+    router.replace(`/play/${level.id}`);
   };
 
   const handleReturnToHome = () => {
