@@ -86,9 +86,16 @@ export const TopNav: React.FC<TopNavProps> = ({
               <span className="hidden sm:inline">Levels</span>
             </Button>
           ) : (
-            <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold text-lg">
-              🧩
-            </div>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={onReturnToCampaignMap}
+              className="gap-1 px-2 sm:px-2.5 h-7"
+              title="Return to Home"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Home</span>
+            </Button>
           )}
 
           <div className="flex flex-col">

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, User, ArrowRight, Gamepad2, ShieldCheck, Trophy } from 'lucide-react';
+import { Users, User, ArrowRight, Gamepad2, ShieldCheck, Trophy, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GenerativeCanvasBackground } from '@/components/game/GenerativeCanvasBackground';
 import { useCampaignProgress } from '@/hooks/useCampaignProgress';
@@ -15,8 +15,33 @@ export default function Home() {
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [inputError, setInputError] = useState('');
   const { totalStars } = useCampaignProgress(CAMPAIGN_LEVELS.length);
-  const { student, triggerHaptic, startParam } = usePassizy();
+  const { student, triggerHaptic, startParam, consumeStartParam, hideBackButton, exit } = usePassizy();
   const [playerName, setPlayerName] = useState('Player');
+
+  // Ensure host back button is always hidden on the root home page
+  useEffect(() => {
+    hideBackButton();
+  }, [hideBackButton]);
+
+  // Guard browser history on root page:
+  // Push a guard state so that if the user swipes back on mobile or presses hardware back,
+  // it triggers exit() instead of traversing backward into stale rooms or game pages.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      window.history.pushState({ jigsawRoot: true }, '', window.location.href);
+    } catch {}
+
+    const handlePopState = () => {
+      exit();
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [exit]);
 
   // Auto-route on deep link (e.g., ?startapp=room_ATEL42, ?startapp=level_3, ?startapp=solo, or direct code ?startapp=W9X2)
   useEffect(() => {
@@ -25,21 +50,26 @@ export default function Home() {
     if (startParam.startsWith('room_')) {
       const targetRoom = startParam.replace('room_', '').trim().toUpperCase();
       if (targetRoom) {
+        consumeStartParam();
         router.replace(`/room/${targetRoom}`);
       }
     } else if (startParam.startsWith('level_') || startParam.startsWith('solo_')) {
       const levelId = parseInt(startParam.replace(/^(level_|solo_)/, ''), 10);
       if (!isNaN(levelId) && levelId >= 1) {
+        consumeStartParam();
         router.replace(`/play/${levelId}`);
       }
     } else if (startParam === 'solo') {
+      consumeStartParam();
       router.replace('/solo');
     } else if (startParam === 'multiplayer') {
+      consumeStartParam();
       router.replace('/multiplayer');
     } else if (/^[A-Za-z0-9]{4,6}$/.test(startParam)) {
+      consumeStartParam();
       router.replace(`/room/${startParam.toUpperCase()}`);
     }
-  }, [startParam, router]);
+  }, [startParam, router, consumeStartParam]);
 
   useEffect(() => {
     const p = getPlayerProfile(student);
@@ -111,6 +141,22 @@ export default function Home() {
             <Trophy className="w-3.5 h-3.5 text-amber-400" />
             <span>{totalStars} Stars</span>
           </div>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              triggerHaptic('light');
+              exit();
+            }}
+            className="h-8 px-2.5 rounded-xl bg-slate-900/80 hover:bg-rose-500/15 border border-slate-800 hover:border-rose-500/40 text-slate-300 hover:text-rose-400 text-xs font-medium backdrop-blur-md gap-1.5 transition-colors cursor-pointer"
+            title="Exit game"
+            aria-label="Exit game"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden xs:inline">Exit</span>
+          </Button>
         </div>
       </header>
 

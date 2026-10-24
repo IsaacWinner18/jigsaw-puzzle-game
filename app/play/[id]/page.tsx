@@ -11,9 +11,16 @@ import { VictoryModal } from '@/components/game/VictoryModal';
 import { CAMPAIGN_LEVELS } from '@/lib/levelData';
 import { useCampaignProgress } from '@/hooks/useCampaignProgress';
 import { usePuzzleGame } from '@/hooks/usePuzzleGame';
+import { usePassizy } from '@/hooks/usePassizy';
 
 function PlayGameContent() {
   const router = useRouter();
+  const { hideBackButton } = usePassizy();
+
+  useEffect(() => {
+    hideBackButton();
+  }, [hideBackButton]);
+
   const params = useParams();
   const rawId = params?.id;
   const levelId = typeof rawId === 'string' ? parseInt(rawId, 10) : 1;
@@ -115,13 +122,13 @@ function PlayGameContent() {
 
   const handlePrevLevel = () => {
     if (!currentLevel || currentLevel.id <= 1) return;
-    router.push(`/play/${currentLevel.id - 1}`);
+    router.replace(`/play/${currentLevel.id - 1}`);
   };
 
   const handleNextLevel = () => {
     if (!currentLevel) return;
     if (hasNextLevel) {
-      router.push(`/play/${currentLevel.id + 1}`);
+      router.replace(`/play/${currentLevel.id + 1}`);
     } else {
       router.replace('/solo');
     }

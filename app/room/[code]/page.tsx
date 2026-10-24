@@ -43,12 +43,33 @@ function MultiplayerRoomContent() {
   const rawCode = params?.code;
   const roomCode = typeof rawCode === 'string' ? rawCode.toUpperCase() : 'LOBBY';
 
-  const { student, triggerHaptic, share, isInitialized, setupBackButton } = usePassizy();
+  const { student, triggerHaptic, share, isInitialized, hideBackButton } = usePassizy();
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [roomState, setRoomState] = useState<MultiplayerRoomState | null>(null);
   const [isLoadingRoom, setIsLoadingRoom] = useState(true);
   const [roomError, setRoomError] = useState<string | null>(null);
+
+  // Tab-scoped signed room capability token
+  const [roomToken, setRoomToken] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        return window.sessionStorage?.getItem(`room_token_${roomCode}`) || null;
+      } catch {}
+    }
+    return null;
+  });
+
+  const updateRoomToken = useCallback((token: string | null) => {
+    if (token) {
+      setRoomToken(token);
+      if (typeof window !== 'undefined') {
+        try {
+          window.sessionStorage?.setItem(`room_token_${roomCode}`, token);
+        } catch {}
+      }
+    }
+  }, [roomCode]);
 
   // Modal & Notice States
   const [exitModalOpen, setExitModalOpen] = useState(false);
@@ -201,10 +222,14 @@ function MultiplayerRoomContent() {
             startedAt: Date.now(),
           };
           if (prev.hostId === localPlayer.id) {
+            const token = roomToken || (typeof window !== 'undefined' ? window.sessionStorage?.getItem(`room_token_${roomCode}`) : null);
             fetch('/api/multiplayer/room', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'start', code: roomCode }),
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { 'x-room-token': token, 'Authorization': `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify({ action: 'start', code: roomCode, token }),
             }).catch(() => {});
           }
           return playingState;
@@ -306,18 +331,26 @@ function MultiplayerRoomContent() {
       };
 
       try {
+        const token = roomToken || (typeof window !== 'undefined' ? window.sessionStorage?.getItem(`room_token_${roomCode}`) : null);
         const joinResponse = await fetch('/api/multiplayer/room', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'x-room-token': token, 'Authorization': `Bearer ${token}` } : {}),
+          },
           body: JSON.stringify({
             action: 'join',
             code: roomCode,
             player: state.players[localPlayer.id],
+            token,
           }),
         });
         const joinData = await joinResponse.json();
         if (!joinResponse.ok || !joinData.success || !joinData.room) {
           throw new Error(joinData.error || 'Unable to join this room.');
+        }
+        if (joinData.token) {
+          updateRoomToken(joinData.token);
         }
         state = joinData.room;
       } catch (err) {
@@ -474,11 +507,15 @@ function MultiplayerRoomContent() {
   const handleHostStartGame = async () => {
     if (!roomState) return;
     triggerHaptic('medium');
+    const token = roomToken || (typeof window !== 'undefined' ? window.sessionStorage?.getItem(`room_token_${roomCode}`) : null);
     try {
       const response = await fetch('/api/multiplayer/room', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'countdown', code: roomCode }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'x-room-token': token, 'Authorization': `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ action: 'countdown', code: roomCode, token }),
       });
       const data = await response.json();
       if (!response.ok || !data.success || !data.room) throw new Error(data.error || 'Unable to start the match.');
@@ -505,13 +542,18 @@ function MultiplayerRoomContent() {
     }
     const isLobby = roomState.status === 'waiting';
     const keepalive = Boolean(options?.keepalive);
+    const token = roomToken || (typeof window !== 'undefined' ? window.sessionStorage?.getItem(`room_token_${roomCode}`) : null);
     const response = await fetch('/api/multiplayer/room', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'x-room-token': token, 'Authorization': `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({
         action: isLobby ? 'leave' : 'forfeit',
         code: roomCode,
         playerId: localPlayer.id,
+        token,
       }),
       keepalive,
     });
@@ -532,7 +574,7 @@ function MultiplayerRoomContent() {
       }
     }
     return true;
-  }, [localPlayer.id, roomCode, roomState]);
+  }, [localPlayer.id, roomCode, roomState, roomToken]);
 
   const handleConfirmExit = async () => {
     setIsConfirmingExit(true);
@@ -560,11 +602,20 @@ function MultiplayerRoomContent() {
     return () => window.removeEventListener('popstate', onPopState);
   }, [leaveCurrentRoom]);
 
+  // Ensure host floating back button is hidden so it doesn't duplicate in-page exit/close controls
   useEffect(() => {
-    return setupBackButton(() => {
-      setExitModalOpen(true);
-    });
-  }, [setupBackButton]);
+    hideBackButton();
+    let unsubPassizy: (() => void) | undefined;
+    if (typeof window !== 'undefined' && window.Passizy?.navigation?.backButton) {
+      unsubPassizy = window.Passizy.navigation.backButton.onClick(() => {
+        setExitModalOpen(true);
+      });
+    }
+    return () => {
+      if (unsubPassizy) unsubPassizy();
+      hideBackButton();
+    };
+  }, [hideBackButton]);
 
   // Generate deterministic puzzle pieces once room enters 'playing'
   useEffect(() => {
@@ -712,10 +763,14 @@ function MultiplayerRoomContent() {
 
           broadcastRef.current?.(updated);
 
+          const token = roomToken || (typeof window !== 'undefined' ? window.sessionStorage?.getItem(`room_token_${roomCode}`) : null);
           await fetch('/api/multiplayer/room', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'progress', code: roomCode, piecesLocked: newLockedCount }),
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { 'x-room-token': token, 'Authorization': `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ action: 'progress', code: roomCode, piecesLocked: newLockedCount, token }),
           });
 
           // Submit to Next.js Serverless Route for authoritative victory verification
@@ -723,12 +778,16 @@ function MultiplayerRoomContent() {
             try {
               const response = await fetch('/api/multiplayer/finish', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...(token ? { 'x-room-token': token, 'Authorization': `Bearer ${token}` } : {}),
+                },
                 body: JSON.stringify({
                   roomCode,
                   playerId: localPlayer.id,
                   playerName: localPlayer.name,
                   elapsedSeconds: timeElapsed,
+                  token,
                 }),
               });
               const data = await response.json();
@@ -850,15 +909,25 @@ function MultiplayerRoomContent() {
         <p className="text-xs sm:text-sm text-slate-400 max-w-sm mb-6 font-inter leading-relaxed">
           {roomError}
         </p>
-        <Button
-          onClick={() => router.push('/multiplayer')}
-          variant="amber"
-          size="default"
-          className="gap-2"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back to Multiplayer</span>
-        </Button>
+        <div className="flex flex-col sm:flex-row items-center gap-3 justify-center w-full max-w-xs">
+          <Button
+            onClick={() => router.replace('/multiplayer')}
+            variant="amber"
+            size="default"
+            className="gap-2 w-full"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Lobby</span>
+          </Button>
+          <Button
+            onClick={() => router.replace('/')}
+            variant="outline"
+            size="default"
+            className="gap-2 w-full border-slate-700 hover:border-slate-500"
+          >
+            <span>Home</span>
+          </Button>
+        </div>
       </div>
     );
   }
@@ -1346,7 +1415,7 @@ function MultiplayerRoomContent() {
                 size="default"
                 onClick={() => {
                   triggerHaptic('medium');
-                  router.push('/multiplayer');
+                  router.replace('/multiplayer');
                 }}
                 className="gap-1.5 flex-1"
               >
@@ -1357,7 +1426,7 @@ function MultiplayerRoomContent() {
               <Button
                 variant="outline"
                 size="default"
-                onClick={() => router.push('/')}
+                onClick={() => router.replace('/')}
                 className="gap-1.5 flex-1"
               >
                 <span>Main Menu</span>
@@ -1423,7 +1492,7 @@ function MultiplayerRoomContent() {
             <Button
               variant="amber"
               size="default"
-              onClick={() => router.push('/multiplayer')}
+              onClick={() => router.replace('/multiplayer')}
               className="w-full"
             >
               Back to Multiplayer

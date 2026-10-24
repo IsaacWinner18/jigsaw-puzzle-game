@@ -93,12 +93,20 @@ function responseWithCapability(
   room: MultiplayerRoomState,
   playerId: string
 ) {
-  const response = NextResponse.json({ success: true, room });
+  const role = room.hostId === playerId ? 'host' : 'player';
+  const dummyRes = NextResponse.json({});
+  const token = setRoomCapability(dummyRes, {
+    code: room.code,
+    playerId,
+    role,
+  });
+
+  const response = NextResponse.json({ success: true, room, token });
   clearOtherRoomCapabilities(request, response, room.code);
   setRoomCapability(response, {
     code: room.code,
     playerId,
-    role: room.hostId === playerId ? 'host' : 'player',
+    role,
   });
   return response;
 }
@@ -262,7 +270,7 @@ export async function POST(req: NextRequest) {
 
       const room = await loadRoom(roomCode);
       if (!room) return error('Room not found.', 404);
-      const capability = getRoomCapability(req, roomCode);
+      const capability = getRoomCapability(req, roomCode, body.token);
       const existingPlayer = room.players[playerId];
       if (capability && capability.playerId !== playerId) {
         return error("You're already connected to this room.", 403);
@@ -303,7 +311,7 @@ export async function POST(req: NextRequest) {
 
     const configurationError = requireMutationBackend();
     if (configurationError) return configurationError;
-    const capability = getRoomCapability(req, roomCode);
+    const capability = getRoomCapability(req, roomCode, body.token);
     if (!capability) return error('Your room session has expired. Rejoin the room to continue.', 401);
     const room = await loadRoom(roomCode);
     if (!room) return error('Room not found.', 404);

@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     }
 
     const code = String(roomCode).toUpperCase();
-    const capability = getRoomCapability(req, code);
+    const capability = getRoomCapability(req, code, body.token);
     if (!capability || capability.playerId !== playerId) {
       return NextResponse.json({ error: 'Your room session has expired. Rejoin the room to continue.' }, { status: 401 });
     }

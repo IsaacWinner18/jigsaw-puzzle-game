@@ -13,7 +13,7 @@ import { getPlayerProfile, savePlayerName } from '@/lib/playerProfile';
 
 export default function MultiplayerSetupPage() {
   const router = useRouter();
-  const { student, triggerHaptic, startParam, isInitialized } = usePassizy();
+  const { student, triggerHaptic, startParam, consumeStartParam, hideBackButton, isInitialized } = usePassizy();
   const [selectedPuzzle, setSelectedPuzzle] = useState<MultiplayerPuzzleTheme>(MULTIPLAYER_PUZZLES[0]);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [isCreating, setIsCreating] = useState(false);
@@ -21,16 +21,25 @@ export default function MultiplayerSetupPage() {
   const [playerName, setPlayerName] = useState<string>('Challenger');
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Ensure host floating back button is hidden since we have a dedicated in-page header Back button
+  useEffect(() => {
+    hideBackButton();
+  }, [hideBackButton]);
+
   // Auto-route if deep-linked to a room
   useEffect(() => {
     if (!startParam) return;
     if (startParam.startsWith('room_')) {
       const code = startParam.replace('room_', '').trim().toUpperCase();
-      if (code) router.replace(`/room/${code}`);
+      if (code) {
+        consumeStartParam();
+        router.replace(`/room/${code}`);
+      }
     } else if (/^[A-Za-z0-9]{4,6}$/.test(startParam)) {
+      consumeStartParam();
       router.replace(`/room/${startParam.toUpperCase()}`);
     }
-  }, [startParam, router]);
+  }, [startParam, router, consumeStartParam]);
 
   useEffect(() => {
     const profile = getPlayerProfile(student);
@@ -104,6 +113,11 @@ export default function MultiplayerSetupPage() {
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to initialize room');
       }
+      if (data.token && typeof window !== 'undefined') {
+        try {
+          window.sessionStorage?.setItem(`room_token_${roomCode}`, data.token);
+        } catch {}
+      }
       setIsCreating(false);
       router.push(`/room/${roomCode}`);
     } catch (err) {
@@ -122,12 +136,12 @@ export default function MultiplayerSetupPage() {
           size="sm"
           onClick={() => {
             triggerHaptic('light');
-            router.push('/');
+            router.replace('/');
           }}
           className="gap-1.5 h-8 px-3 text-xs"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Back</span>
+          <span>Home</span>
         </Button>
 
      

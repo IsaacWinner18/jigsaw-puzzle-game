@@ -129,6 +129,30 @@ export function usePassizy() {
     }
   }, []);
 
+  const consumeStartParam = useCallback(() => {
+    setStartParam(null);
+    if (typeof window !== 'undefined') {
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('startapp') || url.searchParams.has('start_param')) {
+          url.searchParams.delete('startapp');
+          url.searchParams.delete('start_param');
+          window.history.replaceState({}, '', url.pathname + (url.search ? url.search : '') + url.hash);
+        }
+      } catch {}
+    }
+  }, []);
+
+  const hideBackButton = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined' && window.Passizy?.navigation?.backButton) {
+        window.Passizy.navigation.backButton.hide();
+      }
+    } catch {
+      // Silently ignore
+    }
+  }, []);
+
   const setupBackButton = useCallback((onBack: () => void) => {
     let unsub: (() => void) | undefined;
     try {
@@ -222,6 +246,15 @@ export function usePassizy() {
         } else {
           window.Passizy.navigation.close();
         }
+      } else if (typeof window !== 'undefined' && window.parent && window.parent !== window) {
+        window.parent.postMessage(
+          {
+            protocol: 'PASSIZY_MINI_APP_V1',
+            type: 'NAV_CLOSE',
+            requestId: `exit_${Date.now()}`,
+          },
+          '*'
+        );
       }
     } catch {
       // Silently ignore
@@ -232,10 +265,12 @@ export function usePassizy() {
     session,
     student,
     startParam,
+    consumeStartParam,
     isInitialized,
     triggerHaptic,
     setHeaderTitle,
     setupBackButton,
+    hideBackButton,
     goBack,
     back: goBack,
     exit,

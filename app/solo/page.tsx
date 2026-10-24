@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { TopNav } from '@/components/game/TopNav';
 import { CampaignMap } from '@/components/game/CampaignMap';
@@ -11,7 +12,11 @@ import { PuzzleLevel } from '@/types/puzzle';
 export default function SoloCampaignPage() {
   const router = useRouter();
   const { campaignProgress, totalStars } = useCampaignProgress(CAMPAIGN_LEVELS.length);
-  const { triggerHaptic } = usePassizy();
+  const { triggerHaptic, hideBackButton } = usePassizy();
+
+  useEffect(() => {
+    hideBackButton();
+  }, [hideBackButton]);
 
   const handleSelectLevel = (level: PuzzleLevel) => {
     triggerHaptic('light');
@@ -20,7 +25,7 @@ export default function SoloCampaignPage() {
 
   const handleReturnToHome = () => {
     triggerHaptic('light');
-    router.push('/');
+    router.replace('/');
   };
 
   return (
