@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabaseAdmin, isSupabaseConfigured } from '@/lib/supabase';
+import { getRoomCapability } from '@/lib/multiplayerAuth';
 
 interface RoomResult {
   code: string;
@@ -10,23 +11,43 @@ interface RoomResult {
 }
 
 const finishedRooms = new Map<string, RoomResult>();
+const database = supabaseAdmin;
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { roomCode, playerId, playerName, elapsedSeconds } = body;
+    const { roomCode, playerId, elapsedSeconds } = body;
 
     if (!roomCode || !playerId) {
       return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
     }
 
     const code = String(roomCode).toUpperCase();
+    const capability = getRoomCapability(req, code);
+    if (!capability || capability.playerId !== playerId) {
+      return NextResponse.json({ error: 'Your room session has expired. Rejoin the room to continue.' }, { status: 401 });
+    }
     const finishedAt = Date.now();
 
+    if ((isSupabaseConfigured || process.env.NODE_ENV === 'production') && !database) {
+      return NextResponse.json({ error: 'Multiplayer server storage is not configured.' }, { status: 503 });
+    }
+
     // Check Supabase if configured for persistent race verification
-    if (isSupabaseConfigured && supabase) {
+    if (isSupabaseConfigured && database) {
       try {
-        const { data: existingWinners } = await supabase
+        const { data: player } = await database
+          .from('room_players')
+          .select('player_id, name')
+          .eq('room_code', code)
+          .eq('player_id', playerId)
+          .maybeSingle();
+        if (!player) {
+          return NextResponse.json({ error: 'Player is not registered in this room.' }, { status: 403 });
+        }
+        const verifiedPlayerName = player.name || 'Player';
+
+        const { data: existingWinners } = await database
           .from('race_results')
           .select('*')
           .eq('room_code', code)
@@ -36,23 +57,32 @@ export async function POST(req: NextRequest) {
         const hasDbWinner = existingWinners && existingWinners.length > 0;
         const isDbWinner = !hasDbWinner;
 
-        await supabase.from('race_results').insert({
+        const { error: resultError } = await database.from('race_results').insert({
           room_code: code,
           player_id: playerId,
-          player_name: playerName || 'Player',
+          player_name: verifiedPlayerName,
           elapsed_seconds: elapsedSeconds || 0,
           is_winner: isDbWinner,
         });
-
-        if (isDbWinner) {
-          await supabase
-            .from('rooms')
-            .update({
-              status: 'finished',
-              winner_id: playerId,
-              winner_name: playerName || 'Player',
-            })
-            .eq('code', code);
+        if (resultError) {
+          const { data: winner } = await database
+            .from('race_results')
+            .select('*')
+            .eq('room_code', code)
+            .eq('is_winner', true)
+            .single();
+          if (!winner) throw resultError;
+          return NextResponse.json({
+            success: true,
+            isWinner: winner.player_id === playerId,
+            winner: {
+              code,
+              winnerId: winner.player_id,
+              winnerName: winner.player_name,
+              finishedAt: new Date(winner.finished_at).getTime(),
+              elapsedSeconds: Number(winner.elapsed_seconds),
+            },
+          });
         }
 
         const officialWinner: RoomResult = hasDbWinner
@@ -66,7 +96,7 @@ export async function POST(req: NextRequest) {
           : {
               code,
               winnerId: playerId,
-              winnerName: playerName || 'Player',
+            winnerName: verifiedPlayerName,
               finishedAt,
               elapsedSeconds: elapsedSeconds || 0,
             };
@@ -78,6 +108,7 @@ export async function POST(req: NextRequest) {
         });
       } catch (dbErr) {
         console.error('[Supabase DB Error] Finish logging:', dbErr);
+        return NextResponse.json({ error: 'Unable to verify the winner.' }, { status: 503 });
       }
     }
 
@@ -86,7 +117,7 @@ export async function POST(req: NextRequest) {
       const winnerResult: RoomResult = {
         code,
         winnerId: playerId,
-        winnerName: playerName || 'Player',
+        winnerName: 'Player',
         finishedAt,
         elapsedSeconds: elapsedSeconds || 0,
       };

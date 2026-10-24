@@ -201,11 +201,10 @@ function MultiplayerRoomContent() {
             startedAt: Date.now(),
           };
           if (prev.hostId === localPlayer.id) {
-            broadcastRef.current?.(playingState);
             fetch('/api/multiplayer/room', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'update', code: roomCode, room: playingState }),
+              body: JSON.stringify({ action: 'start', code: roomCode }),
             }).catch(() => {});
           }
           return playingState;
@@ -226,9 +225,9 @@ function MultiplayerRoomContent() {
       let state: MultiplayerRoomState | null = null;
 
       // Query official serverless / Supabase backend for room state with retries
-      for (let retry = 0; retry < 5 && !state; retry++) {
+      for (let retry = 0; retry < 3 && !state; retry++) {
         if (retry > 0) {
-          await new Promise((r) => setTimeout(r, 450));
+          await new Promise((r) => setTimeout(r, 250 * 2 ** (retry - 1)));
           if (!isSubscribed) return;
         }
         try {
@@ -241,7 +240,7 @@ function MultiplayerRoomContent() {
           if (data.success && data.room) {
             state = data.room;
             break;
-          } else if (data.error && retry >= 2) {
+          } else if (data.error && (!res.ok || retry >= 2)) {
             if (isSubscribed) {
               setRoomError(data.error);
               setIsLoadingRoom(false);
@@ -304,14 +303,8 @@ function MultiplayerRoomContent() {
         totalPieces: state.rows * state.cols,
       };
 
-      if (isSubscribed) {
-        setRoomState(state);
-        setIsLoadingRoom(false);
-      }
-
-      // Sync joiner to serverless state
       try {
-        await fetch('/api/multiplayer/room', {
+        const joinResponse = await fetch('/api/multiplayer/room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -320,9 +313,24 @@ function MultiplayerRoomContent() {
             player: state.players[localPlayer.id],
           }),
         });
-      } catch {}
+        const joinData = await joinResponse.json();
+        if (!joinResponse.ok || !joinData.success || !joinData.room) {
+          throw new Error(joinData.error || 'Unable to join this room.');
+        }
+        state = joinData.room;
+      } catch (err) {
+        if (isSubscribed) {
+          setRoomError(err instanceof Error ? err.message : 'Unable to join this room.');
+          setIsLoadingRoom(false);
+        }
+        return;
+      }
 
       if (!isSubscribed) return;
+      if (!state) return;
+
+      setRoomState(state);
+      setIsLoadingRoom(false);
 
       // Subscribe to real-time events via Supabase Realtime channel
       const { broadcastUpdate, broadcastAction, unsubscribe } = subscribeToRoom(roomCode, localPlayer, {
@@ -405,6 +413,37 @@ function MultiplayerRoomContent() {
     };
   }, [roomCode, localPlayer.id, startCountdownSequence, triggerHaptic]);
 
+  useEffect(() => {
+    let active = true;
+
+    const refreshRoom = async () => {
+      try {
+        const response = await fetch('/api/multiplayer/room', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'get', code: roomCode }),
+        });
+        const data = await response.json();
+        if (!active || !response.ok || !data.success || !data.room) return;
+
+        setRoomState((previous) => {
+          if (!previous) return previous;
+          if (previous.status === 'waiting' && data.room.status === 'countdown') {
+            startCountdownSequence();
+          }
+          if (data.room.status === 'closed') setRoomClosedModalOpen(true);
+          return data.room;
+        });
+      } catch {}
+    };
+
+    const interval = window.setInterval(refreshRoom, 1000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [roomCode, startCountdownSequence]);
+
   // Rename player dynamically and broadcast update to room
   const handleSaveName = () => {
     const clean = nameInputValue.trim();
@@ -430,17 +469,22 @@ function MultiplayerRoomContent() {
   };
 
   // Host triggers the game start
-  const handleHostStartGame = () => {
+  const handleHostStartGame = async () => {
     if (!roomState) return;
     triggerHaptic('medium');
-
-    const updated: MultiplayerRoomState = {
-      ...roomState,
-      status: 'countdown',
-      countdownValue: 3,
-    };
-    broadcastRef.current?.(updated);
-    startCountdownSequence();
+    try {
+      const response = await fetch('/api/multiplayer/room', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'countdown', code: roomCode }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.room) throw new Error(data.error || 'Unable to start the match.');
+      setRoomState(data.room);
+      startCountdownSequence();
+    } catch (err) {
+      setOpponentNotice(err instanceof Error ? err.message : 'Unable to start the match.');
+    }
   };
 
   // Safe Exit Handlers with Modals
@@ -452,13 +496,14 @@ function MultiplayerRoomContent() {
   const handleConfirmExit = async () => {
     setIsConfirmingExit(true);
     triggerHaptic('medium');
+    let exited = false;
 
     try {
       const isLobby = roomState?.status === 'waiting';
 
       if (isLobby) {
         // Leaving lobby
-        await fetch('/api/multiplayer/room', {
+        const response = await fetch('/api/multiplayer/room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -467,6 +512,8 @@ function MultiplayerRoomContent() {
             playerId: localPlayer.id,
           }),
         });
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Unable to leave the room.');
 
         if (isHost) {
           broadcastActionRef.current?.('ROOM_CLOSED', { reason: 'Host closed the room' });
@@ -475,7 +522,7 @@ function MultiplayerRoomContent() {
         }
       } else {
         // Forfeiting active match
-        await fetch('/api/multiplayer/room', {
+        const response = await fetch('/api/multiplayer/room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -484,15 +531,19 @@ function MultiplayerRoomContent() {
             playerId: localPlayer.id,
           }),
         });
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Unable to forfeit the match.');
 
         broadcastActionRef.current?.('PLAYER_FORFEIT', { playerId: localPlayer.id });
       }
+      exited = true;
     } catch (err) {
       console.error('Error during exit:', err);
+      setRoomError(err instanceof Error ? err.message : 'Unable to leave the room.');
     } finally {
       setIsConfirmingExit(false);
       setExitModalOpen(false);
-      router.push('/multiplayer');
+      if (exited) router.replace('/multiplayer');
     }
   };
 
@@ -630,36 +681,28 @@ function MultiplayerRoomContent() {
           const isPlayerDone = newLockedCount === pieces.length;
           const updated: MultiplayerRoomState = {
             ...roomState,
-            status: isPlayerDone ? 'finished' : roomState.status,
-            winnerId: isPlayerDone ? localPlayer.id : roomState.winnerId,
-            winnerName: isPlayerDone ? localPlayer.name : roomState.winnerName,
             players: {
               ...roomState.players,
               [localPlayer.id]: {
                 ...localPlayer,
                 piecesLocked: newLockedCount,
-                completedAt: isPlayerDone ? Date.now() : undefined,
-                elapsedSeconds: isPlayerDone ? timeElapsed : undefined,
-                status: isPlayerDone ? 'finished' : 'playing',
+                status: 'playing',
               },
             },
           };
 
           broadcastRef.current?.(updated);
 
+          await fetch('/api/multiplayer/room', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'progress', code: roomCode, piecesLocked: newLockedCount }),
+          });
+
           // Submit to Next.js Serverless Route for authoritative victory verification
           if (isPlayerDone) {
-            triggerHaptic('heavy');
-            confetti({
-              particleCount: 40,
-              spread: 55,
-              origin: { y: 0.65 },
-              scalar: 0.8,
-              disableForReducedMotion: true,
-            });
-
             try {
-              await fetch('/api/multiplayer/finish', {
+              const response = await fetch('/api/multiplayer/finish', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -669,8 +712,28 @@ function MultiplayerRoomContent() {
                   elapsedSeconds: timeElapsed,
                 }),
               });
+              const data = await response.json();
+              if (!response.ok || !data.success || !data.winner) {
+                throw new Error(data.error || 'Unable to verify the winner.');
+              }
+              setRoomState((previous) => previous ? {
+                ...previous,
+                status: 'finished',
+                winnerId: data.winner.winnerId,
+                winnerName: data.winner.winnerName,
+              } : previous);
+              if (data.isWinner) {
+                triggerHaptic('heavy');
+                confetti({
+                  particleCount: 40,
+                  spread: 55,
+                  origin: { y: 0.65 },
+                  scalar: 0.8,
+                  disableForReducedMotion: true,
+                });
+              }
             } catch {
-              // Local winner registered
+              setOpponentNotice('Unable to verify the winner. Please wait for room sync.');
             }
           }
         }

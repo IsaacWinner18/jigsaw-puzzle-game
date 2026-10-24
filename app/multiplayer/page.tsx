@@ -17,6 +17,7 @@ export default function MultiplayerSetupPage() {
   const [selectedPuzzle, setSelectedPuzzle] = useState<MultiplayerPuzzleTheme>(MULTIPLAYER_PUZZLES[0]);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState<string>('Challenger');
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -74,6 +75,7 @@ export default function MultiplayerSetupPage() {
 
   const handleCreateRoom = async () => {
     setIsCreating(true);
+    setCreateError(null);
     triggerHaptic('medium');
 
     const roomCode = generateRoomCode();
@@ -98,13 +100,15 @@ export default function MultiplayerSetupPage() {
         }),
       });
       const data = await res.json();
-      if (!data.success) {
+      if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to initialize room');
       }
+      setIsCreating(false);
+      router.push(`/room/${roomCode}`);
     } catch (err) {
       console.error('Error creating room on server:', err);
-    } finally {
-      router.push(`/room/${roomCode}`);
+      setCreateError(err instanceof Error ? err.message : 'Unable to create a room. Please try again.');
+      setIsCreating(false);
     }
   };
 
@@ -281,6 +285,7 @@ export default function MultiplayerSetupPage() {
             <span>{isCreating ? 'Creating Room...' : 'Create Battle Room'}</span>
             <ArrowRight className="w-4 h-4" />
           </Button>
+          {createError && <p className="text-xs text-rose-400 sm:ml-auto">{createError}</p>}
         </div>
       </main>
     </div>

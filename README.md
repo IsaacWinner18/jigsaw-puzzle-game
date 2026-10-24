@@ -4,6 +4,10 @@
 
 # Jigsaw Atelier
 
+## Multiplayer production configuration
+
+Set `SUPABASE_SERVICE_ROLE_KEY` and a long, random `MULTIPLAYER_TOKEN_SECRET` in the server environment. Do not expose either as a `NEXT_PUBLIC_*` variable. For an existing database, apply `supabase/migrations/20261024140000_secure_multiplayer.sql`; it restricts database writes to the server API and adds the one-winner race constraint.
+
 Tactile jigsaw puzzle campaign with mathematical interlocking tab/blank pieces, adaptive difficulty, sharp 3D anime & cartoon artwork, and real-time multiplayer 1v1 puzzle battles built for the Passizy platform.
 
 ## Run Locally

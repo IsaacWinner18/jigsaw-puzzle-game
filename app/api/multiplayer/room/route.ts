@@ -1,345 +1,309 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateRoomCode, generateSeed } from '@/lib/seededRandom';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, supabaseAdmin, isSupabaseConfigured } from '@/lib/supabase';
+import { MultiplayerRoomState } from '@/lib/multiplayerStore';
+import {
+  getRoomCapability,
+  isMultiplayerAuthConfigured,
+  setRoomCapability,
+} from '@/lib/multiplayerAuth';
 
-// In-memory cache for fast local access / fallback
-const activeRooms = new Map<string, any>();
+const activeRooms = new Map<string, MultiplayerRoomState>();
+const database = supabaseAdmin;
+const roomCodePattern = /^[A-Z0-9]{4,8}$/;
+
+function error(message: string, status: number) {
+  return NextResponse.json({ success: false, error: message }, { status });
+}
+
+function normalizeCode(value: unknown) {
+  const code = String(value || '').trim().toUpperCase();
+  return roomCodePattern.test(code) ? code : null;
+}
+
+function normalizeName(value: unknown) {
+  const name = String(value || '').trim().slice(0, 20);
+  return name || 'Challenger';
+}
+
+function normalizeGrid(value: unknown, fallback: number) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 2 && number <= 12 ? number : fallback;
+}
+
+function requireMutationBackend() {
+  if (isSupabaseConfigured && !database) {
+    return error('Multiplayer server storage is not configured. Set SUPABASE_SERVICE_ROLE_KEY.', 503);
+  }
+  if (process.env.NODE_ENV === 'production' && !database) {
+    return error('Multiplayer server storage is not configured.', 503);
+  }
+  return null;
+}
+
+function formatRoom(room: any): MultiplayerRoomState {
+  const players: MultiplayerRoomState['players'] = {};
+  for (const player of room.room_players || []) {
+    players[player.player_id] = {
+      id: player.player_id,
+      name: player.name,
+      department: player.department || undefined,
+      isHost: player.is_host,
+      piecesLocked: player.pieces_locked,
+      totalPieces: player.total_pieces,
+      status: player.status,
+    };
+  }
+  return {
+    code: room.code,
+    hostId: room.host_id,
+    puzzleId: room.puzzle_id,
+    difficulty: room.difficulty,
+    rows: room.rows,
+    cols: room.cols,
+    seed: Number(room.seed),
+    status: room.status,
+    startedAt: room.started_at ? new Date(room.started_at).getTime() : undefined,
+    winnerId: room.winner_id || undefined,
+    winnerName: room.winner_name || undefined,
+    players,
+  };
+}
+
+async function loadRoom(code: string) {
+  if (database) {
+    const { data, error: lookupError } = await database
+      .from('rooms')
+      .select('*, room_players(*)')
+      .eq('code', code)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+    if (!data) return null;
+    const room = formatRoom(data);
+    activeRooms.set(code, room);
+    return room;
+  }
+  return activeRooms.get(code) || null;
+}
+
+function responseWithCapability(room: MultiplayerRoomState, playerId: string) {
+  const response = NextResponse.json({ success: true, room });
+  setRoomCapability(response, {
+    code: room.code,
+    playerId,
+    role: room.hostId === playerId ? 'host' : 'player',
+  });
+  return response;
+}
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, code, hostId, hostName, puzzleId, difficulty, rows, cols } = body;
+    const action = String(body.action || '');
+
+    if (!isMultiplayerAuthConfigured) {
+      return error('Multiplayer is not configured. Set MULTIPLAYER_TOKEN_SECRET on the server.', 503);
+    }
 
     if (action === 'create') {
-      const roomCode = code || generateRoomCode();
-      const seed = generateSeed();
+      const configurationError = requireMutationBackend();
+      if (configurationError) return configurationError;
 
-      const newRoom = {
+      const roomCode = normalizeCode(body.code) || generateRoomCode();
+      const hostId = String(body.hostId || '').trim();
+      if (!hostId || hostId.length > 128) return error('Invalid host identity.', 400);
+
+      const rows = normalizeGrid(body.rows, 3);
+      const cols = normalizeGrid(body.cols, 3);
+      const hostName = normalizeName(body.hostName);
+      const seed = generateSeed();
+      const puzzleId = String(body.puzzleId || 'tom-jerry').slice(0, 80);
+      const difficulty = String(body.difficulty || 'Beginner').slice(0, 32);
+
+      if (database) {
+        const { error: createError } = await database.rpc('create_multiplayer_room', {
+          p_code: roomCode,
+          p_host_id: hostId,
+          p_host_name: hostName,
+          p_puzzle_id: puzzleId,
+          p_difficulty: difficulty,
+          p_rows: rows,
+          p_cols: cols,
+          p_seed: seed,
+        });
+        if (createError) return error('Unable to create the room. Please try again.', 503);
+      }
+
+      const room: MultiplayerRoomState = {
         code: roomCode,
         hostId,
-        puzzleId: puzzleId || 'tom-jerry',
-        difficulty: difficulty || 'Beginner',
-        rows: rows || 3,
-        cols: cols || 3,
+        puzzleId,
+        difficulty: difficulty as MultiplayerRoomState['difficulty'],
+        rows,
+        cols,
         seed,
         status: 'waiting',
-        createdAt: Date.now(),
         players: {
           [hostId]: {
             id: hostId,
-            name: hostName || 'Host Player',
+            name: hostName,
             isHost: true,
             piecesLocked: 0,
-            totalPieces: (rows || 3) * (cols || 3),
+            totalPieces: rows * cols,
             status: 'ready',
           },
         },
       };
-
-      activeRooms.set(roomCode, newRoom);
-
-      // Persist to Supabase Database if configured
-      if (isSupabaseConfigured && supabase) {
-        try {
-          await supabase.from('rooms').insert({
-            code: roomCode,
-            host_id: hostId,
-            puzzle_id: puzzleId || 'tom-jerry',
-            difficulty: difficulty || 'Beginner',
-            rows: rows || 3,
-            cols: cols || 3,
-            seed,
-            status: 'waiting',
-          });
-
-          await supabase.from('room_players').insert({
-            room_code: roomCode,
-            player_id: hostId,
-            name: hostName || 'Host Player',
-            is_host: true,
-            pieces_locked: 0,
-            total_pieces: (rows || 3) * (cols || 3),
-            status: 'ready',
-          });
-        } catch (dbErr) {
-          console.error('[Supabase DB Error] Room create insert:', dbErr);
-        }
-      }
-
-      return NextResponse.json({ success: true, room: newRoom });
+      activeRooms.set(roomCode, room);
+      return responseWithCapability(room, hostId);
     }
 
+    const roomCode = normalizeCode(body.code);
+    if (!roomCode) return error('Invalid room code.', 400);
+
     if (action === 'get') {
-      const roomCode = String(code).toUpperCase();
-
-      // Check Supabase Database first if configured
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const { data: dbRoom } = await supabase
-            .from('rooms')
-            .select('*, room_players(*)')
-            .eq('code', roomCode)
-            .single();
-
-          if (dbRoom) {
-            const playersMap: Record<string, any> = {};
-            (dbRoom.room_players || []).forEach((p: any) => {
-              playersMap[p.player_id] = {
-                id: p.player_id,
-                name: p.name,
-                department: p.department,
-                isHost: p.is_host,
-                piecesLocked: p.pieces_locked,
-                totalPieces: p.total_pieces,
-                status: p.status,
-              };
-            });
-
-            const formattedRoom = {
-              code: dbRoom.code,
-              hostId: dbRoom.host_id,
-              puzzleId: dbRoom.puzzle_id,
-              difficulty: dbRoom.difficulty,
-              rows: dbRoom.rows,
-              cols: dbRoom.cols,
-              seed: Number(dbRoom.seed),
-              status: dbRoom.status,
-              createdAt: new Date(dbRoom.created_at).getTime(),
-              players: playersMap,
-            };
-            activeRooms.set(roomCode, formattedRoom);
-            return NextResponse.json({ success: true, room: formattedRoom });
-          }
-        } catch (dbErr) {
-          console.error('[Supabase DB Error] Room lookup:', dbErr);
-        }
-      }
-
-      // Fallback to active memory cache
-      const room = activeRooms.get(roomCode);
-      if (!room) {
-        return NextResponse.json({ success: false, error: 'Room not found' }, { status: 404 });
-      }
-      return NextResponse.json({ success: true, room });
+      const room = database ? await loadRoom(roomCode) : activeRooms.get(roomCode);
+      return room ? NextResponse.json({ success: true, room }) : error('Room not found.', 404);
     }
 
     if (action === 'join') {
-      const roomCode = String(code).toUpperCase();
-      const { player } = body;
+      const configurationError = requireMutationBackend();
+      if (configurationError) return configurationError;
+      const requestedPlayer = body.player;
+      const playerId = String(requestedPlayer?.id || '').trim();
+      if (!playerId || playerId.length > 128) return error('Invalid player identity.', 400);
 
-      // 1. Check Supabase DB first
-      let currentRoom = activeRooms.get(roomCode);
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const { data: dbRoom } = await supabase
-            .from('rooms')
-            .select('*, room_players(*)')
-            .eq('code', roomCode)
-            .single();
+      const room = await loadRoom(roomCode);
+      if (!room) return error('Room not found.', 404);
+      const capability = getRoomCapability(req, roomCode);
+      const existingPlayer = room.players[playerId];
+      if ((capability && capability.playerId !== playerId) || (existingPlayer && capability?.playerId !== playerId)) {
+        return error('This player is already registered to another room session.', 403);
+      }
+      if (room.status !== 'waiting' && !existingPlayer) return error('Match is already in progress.', 403);
+      if (!existingPlayer && Object.keys(room.players).length >= 2) return error('Room is full.', 409);
 
-          if (dbRoom) {
-            const playersMap: Record<string, any> = {};
-            (dbRoom.room_players || []).forEach((p: any) => {
-              playersMap[p.player_id] = {
-                id: p.player_id,
-                name: p.name,
-                department: p.department,
-                isHost: p.is_host,
-                piecesLocked: p.pieces_locked,
-                totalPieces: p.total_pieces,
-                status: p.status,
-              };
-            });
-            currentRoom = {
-              code: dbRoom.code,
-              hostId: dbRoom.host_id,
-              puzzleId: dbRoom.puzzle_id,
-              difficulty: dbRoom.difficulty,
-              rows: dbRoom.rows,
-              cols: dbRoom.cols,
-              seed: Number(dbRoom.seed),
-              status: dbRoom.status,
-              createdAt: new Date(dbRoom.created_at).getTime(),
-              players: playersMap,
-            };
-            activeRooms.set(roomCode, currentRoom);
-          }
-        } catch (dbErr) {
-          console.error('[Supabase DB Error] Room lookup in join:', dbErr);
-        }
+      const player = {
+        id: playerId,
+        name: normalizeName(requestedPlayer?.name),
+        department: typeof requestedPlayer?.department === 'string' ? requestedPlayer.department.slice(0, 80) : undefined,
+        isHost: room.hostId === playerId,
+        piecesLocked: existingPlayer?.piecesLocked || 0,
+        totalPieces: room.rows * room.cols,
+        status: existingPlayer?.status || 'ready',
+      } as const;
+
+      if (database) {
+        const { error: joinError } = await database.from('room_players').upsert({
+          room_code: roomCode,
+          player_id: player.id,
+          name: player.name,
+          department: player.department,
+          is_host: player.isHost,
+          pieces_locked: player.piecesLocked,
+          total_pieces: player.totalPieces,
+          status: player.status,
+        });
+        if (joinError) return error(joinError.message === 'Room is full' ? 'Room is full.' : 'Unable to join the room.', 409);
       }
 
-      if (!currentRoom) {
-        return NextResponse.json({ success: false, error: 'Room not found' }, { status: 404 });
-      }
-
-      // Check room status condition
-      if (currentRoom.status === 'closed') {
-        return NextResponse.json({ success: false, error: 'This room was closed by the host' }, { status: 400 });
-      }
-
-      if (currentRoom.status === 'finished') {
-        return NextResponse.json({ success: false, error: 'This match has already ended' }, { status: 400 });
-      }
-
-      const existingPlayerIds = Object.keys(currentRoom.players || {});
-      const isAlreadyInRoom = player?.id && existingPlayerIds.includes(player.id);
-
-      // Check if room is in active battle
-      if ((currentRoom.status === 'playing' || currentRoom.status === 'countdown') && !isAlreadyInRoom) {
-        return NextResponse.json({ success: false, error: 'Match is already in progress' }, { status: 403 });
-      }
-
-      // Check 1v1 capacity limit (max 2 players)
-      if (currentRoom.status === 'waiting' && !isAlreadyInRoom && existingPlayerIds.length >= 2) {
-        return NextResponse.json({ success: false, error: 'Room is full (1v1 battle limit reached)' }, { status: 409 });
-      }
-
-      if (player && player.id) {
-        currentRoom.players[player.id] = player;
-        activeRooms.set(roomCode, currentRoom);
-      }
-
-      // Persist joined player to Supabase DB
-      if (isSupabaseConfigured && supabase && player && player.id) {
-        try {
-          await supabase.from('room_players').upsert({
-            room_code: roomCode,
-            player_id: player.id,
-            name: player.name,
-            department: player.department,
-            is_host: Boolean(player.isHost),
-            pieces_locked: player.piecesLocked || 0,
-            total_pieces: player.totalPieces || (currentRoom.rows * currentRoom.cols),
-            status: player.status || 'ready',
-          });
-        } catch (dbErr) {
-          console.error('[Supabase DB Error] Room player join:', dbErr);
-        }
-      }
-
-      return NextResponse.json({ success: true, room: currentRoom });
+      room.players[playerId] = player;
+      activeRooms.set(roomCode, room);
+      return responseWithCapability(room, playerId);
     }
 
+    const configurationError = requireMutationBackend();
+    if (configurationError) return configurationError;
+    const capability = getRoomCapability(req, roomCode);
+    if (!capability) return error('Your room session has expired. Rejoin the room to continue.', 401);
+    const room = await loadRoom(roomCode);
+    if (!room) return error('Room not found.', 404);
+    const playerId = capability.playerId;
+    if (!room.players[playerId]) return error('Player is not registered in this room.', 403);
+
     if (action === 'leave') {
-      const roomCode = String(code).toUpperCase();
-      const { playerId } = body;
-      const room = activeRooms.get(roomCode);
-
-      if (room && playerId) {
-        // If host leaves: mark room as closed
-        if (room.hostId === playerId) {
-          room.status = 'closed';
-          activeRooms.delete(roomCode);
-
-          if (isSupabaseConfigured && supabase) {
-            try {
-              await supabase.from('rooms').update({ status: 'closed' }).eq('code', roomCode);
-              await supabase.from('rooms').delete().eq('code', roomCode);
-            } catch (dbErr) {
-              console.error('[Supabase DB Error] Host room close:', dbErr);
-            }
-          }
-
-          return NextResponse.json({ success: true, roomClosed: true });
+      if (playerId === room.hostId) {
+        if (database) {
+          const { error: closeError } = await database.from('rooms').update({ status: 'closed' }).eq('code', roomCode).eq('host_id', playerId);
+          if (closeError) return error('Unable to close the room.', 503);
         }
-
-        // If guest leaves: remove from player roster
-        delete room.players[playerId];
+        room.status = 'closed';
         activeRooms.set(roomCode, room);
-
-        if (isSupabaseConfigured && supabase) {
-          try {
-            await supabase
-              .from('room_players')
-              .delete()
-              .eq('room_code', roomCode)
-              .eq('player_id', playerId);
-          } catch (dbErr) {
-            console.error('[Supabase DB Error] Guest leave:', dbErr);
-          }
-        }
-
-        return NextResponse.json({ success: true, room });
+        return NextResponse.json({ success: true, roomClosed: true });
       }
-
+      if (database) {
+        const { error: leaveError } = await database.from('room_players').delete().eq('room_code', roomCode).eq('player_id', playerId);
+        if (leaveError) return error('Unable to leave the room.', 503);
+      }
+      delete room.players[playerId];
+      activeRooms.set(roomCode, room);
       return NextResponse.json({ success: true });
     }
 
     if (action === 'forfeit') {
-      const roomCode = String(code).toUpperCase();
-      const { playerId } = body;
-      const room = activeRooms.get(roomCode);
-
-      if (room && playerId) {
-        // Find opponent (the winner)
-        const opponent = Object.values(room.players || {}).find((p: any) => p.id !== playerId) as any;
-        const winnerId = opponent ? opponent.id : null;
-        const winnerName = opponent ? opponent.name : 'Opponent';
-
-        room.status = 'finished';
-        room.winnerId = winnerId;
-        room.winnerName = winnerName;
-
-        if (room.players[playerId]) {
-          room.players[playerId].status = 'forfeited';
-        }
-
-        activeRooms.set(roomCode, room);
-
-        if (isSupabaseConfigured && supabase) {
-          try {
-            await supabase
-              .from('rooms')
-              .update({
-                status: 'finished',
-                winner_id: winnerId,
-                winner_name: winnerName,
-              })
-              .eq('code', roomCode);
-
-            await supabase
-              .from('room_players')
-              .update({ status: 'forfeited' })
-              .eq('room_code', roomCode)
-              .eq('player_id', playerId);
-          } catch (dbErr) {
-            console.error('[Supabase DB Error] Forfeit update:', dbErr);
-          }
-        }
-
-        return NextResponse.json({ success: true, room, winnerId, winnerName });
+      const opponent = Object.values(room.players).find((player) => player.id !== playerId);
+      if (database) {
+        const { error: forfeitError } = await database
+          .from('rooms')
+          .update({ status: 'finished', winner_id: opponent?.id || null, winner_name: opponent?.name || 'Opponent' })
+          .eq('code', roomCode)
+          .neq('status', 'finished');
+        if (forfeitError) return error('Unable to forfeit the match.', 503);
+        await database.from('room_players').update({ status: 'forfeited' }).eq('room_code', roomCode).eq('player_id', playerId);
       }
+      room.status = 'finished';
+      room.winnerId = opponent?.id;
+      room.winnerName = opponent?.name || 'Opponent';
+      room.players[playerId] = { ...room.players[playerId], status: 'forfeited' };
+      activeRooms.set(roomCode, room);
+      return NextResponse.json({ success: true, room });
+    }
 
+    if (action === 'countdown' || action === 'start') {
+      if (capability.role !== 'host' || playerId !== room.hostId) return error('Only the host can start the match.', 403);
+      const nextStatus = action === 'countdown' ? 'countdown' : 'playing';
+      const allowedStatus = action === 'countdown' ? 'waiting' : 'countdown';
+      if (room.status !== allowedStatus) return error('The match cannot transition from its current state.', 409);
+      const startedAt = new Date().toISOString();
+      if (database) {
+        const { data, error: startError } = await database
+          .from('rooms')
+          .update({ status: nextStatus, started_at: startedAt })
+          .eq('code', roomCode)
+          .eq('host_id', playerId)
+          .eq('status', allowedStatus)
+          .select('code')
+          .maybeSingle();
+        if (startError || !data) return error('Unable to start the match.', 409);
+      }
+      room.status = nextStatus;
+      room.startedAt = new Date(startedAt).getTime();
+      activeRooms.set(roomCode, room);
+      return NextResponse.json({ success: true, room });
+    }
+
+    if (action === 'progress') {
+      const piecesLocked = Number(body.piecesLocked);
+      const totalPieces = room.rows * room.cols;
+      if (!Number.isInteger(piecesLocked) || piecesLocked < 0 || piecesLocked > totalPieces) {
+        return error('Invalid puzzle progress.', 400);
+      }
+      if (database) {
+        const { error: progressError } = await database
+          .from('room_players')
+          .update({ pieces_locked: piecesLocked, status: 'playing' })
+          .eq('room_code', roomCode)
+          .eq('player_id', playerId);
+        if (progressError) return error('Unable to save puzzle progress.', 503);
+      }
+      room.players[playerId] = { ...room.players[playerId], piecesLocked, status: 'playing' };
+      activeRooms.set(roomCode, room);
       return NextResponse.json({ success: true });
     }
 
-    if (action === 'update') {
-      const roomCode = String(code).toUpperCase();
-      if (body.room) {
-        activeRooms.set(roomCode, body.room);
-
-        if (isSupabaseConfigured && supabase) {
-          try {
-            await supabase
-              .from('rooms')
-              .update({
-                status: body.room.status,
-                winner_id: body.room.winnerId,
-                winner_name: body.room.winnerName,
-              })
-              .eq('code', roomCode);
-          } catch (dbErr) {
-            console.error('[Supabase DB Error] Room update:', dbErr);
-          }
-        }
-
-        return NextResponse.json({ success: true, room: body.room });
-      }
-    }
-
-    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return error('Invalid action.', 400);
+  } catch (exception) {
+    console.error('[Multiplayer Room Error]', exception);
+    return error('Unable to process the room request.', 500);
   }
 }

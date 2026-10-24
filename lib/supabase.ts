@@ -9,6 +9,7 @@ const supabaseAnonKey =
   rawKey && !rawKey.includes('your-supabase') && !rawKey.includes('placeholder')
     ? rawKey
     : '';
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 /**
  * Returns true if valid Supabase credentials have been configured
@@ -33,3 +34,8 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
       },
     })
   : null;
+
+export const supabaseAdmin: SupabaseClient | null =
+  isSupabaseConfigured && serviceRoleKey
+    ? createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } })
+    : null;
