@@ -3,6 +3,8 @@ import { generateRoomCode, generateSeed } from '@/lib/seededRandom';
 import { supabase, supabaseAdmin, isSupabaseConfigured } from '@/lib/supabase';
 import { MultiplayerRoomState } from '@/lib/multiplayerStore';
 import {
+  clearOtherRoomCapabilities,
+  clearRoomCapability,
   getRoomCapability,
   isMultiplayerAuthConfigured,
   setRoomCapability,
@@ -86,14 +88,97 @@ async function loadRoom(code: string) {
   return activeRooms.get(code) || null;
 }
 
-function responseWithCapability(room: MultiplayerRoomState, playerId: string) {
+function responseWithCapability(
+  request: NextRequest,
+  room: MultiplayerRoomState,
+  playerId: string
+) {
   const response = NextResponse.json({ success: true, room });
+  clearOtherRoomCapabilities(request, response, room.code);
   setRoomCapability(response, {
     code: room.code,
     playerId,
     role: room.hostId === playerId ? 'host' : 'player',
   });
   return response;
+}
+
+async function disconnectPlayerFromOtherRooms(playerId: string, exceptCode?: string) {
+  const closeStatuses = ['waiting', 'countdown', 'playing'];
+
+  if (database) {
+    const { data: memberships } = await database
+      .from('room_players')
+      .select('room_code, is_host')
+      .eq('player_id', playerId);
+    if (!memberships?.length) return;
+
+    const codes = memberships
+      .map((row) => row.room_code)
+      .filter((code) => code && code !== exceptCode);
+    if (!codes.length) return;
+
+    const { data: rooms } = await database
+      .from('rooms')
+      .select('code, host_id, status')
+      .in('code', codes);
+    if (!rooms?.length) return;
+
+    for (const other of rooms) {
+      if (!closeStatuses.includes(other.status)) continue;
+      const membership = memberships.find((row) => row.room_code === other.code);
+      const isHost = membership?.is_host || other.host_id === playerId;
+
+      if (other.status === 'playing' && !isHost) {
+        const { data: roster } = await database
+          .from('room_players')
+          .select('player_id, name')
+          .eq('room_code', other.code);
+        const opponent = (roster || []).find((player) => player.player_id !== playerId);
+        await database
+          .from('rooms')
+          .update({
+            status: 'finished',
+            winner_id: opponent?.player_id || null,
+            winner_name: opponent?.name || 'Opponent',
+          })
+          .eq('code', other.code)
+          .neq('status', 'finished');
+        await database
+          .from('room_players')
+          .update({ status: 'forfeited' })
+          .eq('room_code', other.code)
+          .eq('player_id', playerId);
+      } else if (isHost) {
+        await database.from('rooms').update({ status: 'closed' }).eq('code', other.code);
+      } else {
+        await database.from('room_players').delete().eq('room_code', other.code).eq('player_id', playerId);
+      }
+      activeRooms.delete(other.code);
+    }
+    return;
+  }
+
+  for (const [code, room] of activeRooms) {
+    if (exceptCode && code === exceptCode) continue;
+    if (!closeStatuses.includes(room.status) || !room.players[playerId]) continue;
+    if (room.status === 'playing' && room.hostId !== playerId) {
+      const opponent = Object.values(room.players).find((player) => player.id !== playerId);
+      room.status = 'finished';
+      room.winnerId = opponent?.id;
+      room.winnerName = opponent?.name || 'Opponent';
+      room.players[playerId] = { ...room.players[playerId], status: 'forfeited' };
+      activeRooms.set(code, room);
+      continue;
+    }
+    if (room.hostId === playerId) {
+      room.status = 'closed';
+      activeRooms.set(code, room);
+      continue;
+    }
+    delete room.players[playerId];
+    activeRooms.set(code, room);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -134,6 +219,8 @@ export async function POST(req: NextRequest) {
         if (createError) return error('Unable to create the room. Please try again.', 503);
       }
 
+      await disconnectPlayerFromOtherRooms(hostId, roomCode);
+
       const room: MultiplayerRoomState = {
         code: roomCode,
         hostId,
@@ -155,7 +242,7 @@ export async function POST(req: NextRequest) {
         },
       };
       activeRooms.set(roomCode, room);
-      return responseWithCapability(room, hostId);
+      return responseWithCapability(req, room, hostId);
     }
 
     const roomCode = normalizeCode(body.code);
@@ -177,11 +264,13 @@ export async function POST(req: NextRequest) {
       if (!room) return error('Room not found.', 404);
       const capability = getRoomCapability(req, roomCode);
       const existingPlayer = room.players[playerId];
-      if ((capability && capability.playerId !== playerId) || (existingPlayer && capability?.playerId !== playerId)) {
-        return error('This player is already registered to another room session.', 403);
+      if (capability && capability.playerId !== playerId) {
+        return error("You're already connected to this room.", 403);
       }
-      if (room.status !== 'waiting' && !existingPlayer) return error('Match is already in progress.', 403);
-      if (!existingPlayer && Object.keys(room.players).length >= 2) return error('Room is full.', 409);
+      if (room.status !== 'waiting' && !existingPlayer) return error('This match is already in progress.', 403);
+      if (!existingPlayer && Object.keys(room.players).length >= 2) return error('This room is full.', 409);
+
+      await disconnectPlayerFromOtherRooms(playerId, roomCode);
 
       const player = {
         id: playerId,
@@ -203,13 +292,13 @@ export async function POST(req: NextRequest) {
           pieces_locked: player.piecesLocked,
           total_pieces: player.totalPieces,
           status: player.status,
-        });
+        }, { onConflict: 'room_code,player_id' });
         if (joinError) return error(joinError.message === 'Room is full' ? 'Room is full.' : 'Unable to join the room.', 409);
       }
 
       room.players[playerId] = player;
       activeRooms.set(roomCode, room);
-      return responseWithCapability(room, playerId);
+      return responseWithCapability(req, room, playerId);
     }
 
     const configurationError = requireMutationBackend();
@@ -229,7 +318,9 @@ export async function POST(req: NextRequest) {
         }
         room.status = 'closed';
         activeRooms.set(roomCode, room);
-        return NextResponse.json({ success: true, roomClosed: true });
+        const closed = NextResponse.json({ success: true, roomClosed: true });
+        clearRoomCapability(closed, roomCode);
+        return closed;
       }
       if (database) {
         const { error: leaveError } = await database.from('room_players').delete().eq('room_code', roomCode).eq('player_id', playerId);
@@ -237,7 +328,9 @@ export async function POST(req: NextRequest) {
       }
       delete room.players[playerId];
       activeRooms.set(roomCode, room);
-      return NextResponse.json({ success: true });
+      const left = NextResponse.json({ success: true });
+      clearRoomCapability(left, roomCode);
+      return left;
     }
 
     if (action === 'forfeit') {
@@ -256,7 +349,9 @@ export async function POST(req: NextRequest) {
       room.winnerName = opponent?.name || 'Opponent';
       room.players[playerId] = { ...room.players[playerId], status: 'forfeited' };
       activeRooms.set(roomCode, room);
-      return NextResponse.json({ success: true, room });
+      const forfeited = NextResponse.json({ success: true, room });
+      clearRoomCapability(forfeited, roomCode);
+      return forfeited;
     }
 
     if (action === 'countdown' || action === 'start') {

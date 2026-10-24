@@ -34,15 +34,19 @@ function generateUniqueId(): string {
  * Completely free of localStorage and sessionStorage.
  */
 export function getPlayerProfile(studentProfile?: { id?: string; name?: string } | null): PlayerProfile {
-  if (studentProfile && studentProfile.id && studentProfile.name) {
-    return {
-      id: studentProfile.id,
-      name: studentProfile.name,
-    };
-  }
-
   if (typeof window === 'undefined') {
     return { id: 'usr_server', name: 'Player' };
+  }
+
+  // Persist Passizy identity onto the session cookie so create-room and join-room
+  // use the same player id even before the SDK finishes loading on the next page.
+  if (studentProfile?.id) {
+    memoryPlayerId = studentProfile.id;
+    setSessionCookie('jigsaw_session_player_id', memoryPlayerId);
+    if (studentProfile.name) {
+      memoryPlayerName = studentProfile.name;
+      setSessionCookie('jigsaw_session_player_name', memoryPlayerName);
+    }
   }
 
   if (!memoryPlayerId) {

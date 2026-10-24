@@ -43,7 +43,7 @@ function MultiplayerRoomContent() {
   const rawCode = params?.code;
   const roomCode = typeof rawCode === 'string' ? rawCode.toUpperCase() : 'LOBBY';
 
-  const { student, triggerHaptic, share } = usePassizy();
+  const { student, triggerHaptic, share, isInitialized, setupBackButton } = usePassizy();
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [roomState, setRoomState] = useState<MultiplayerRoomState | null>(null);
@@ -215,6 +215,8 @@ function MultiplayerRoomContent() {
 
   // Initialize room & sync subscription (Pure Supabase / Network - Zero Browser Storage)
   useEffect(() => {
+    if (!isInitialized) return;
+
     let isSubscribed = true;
     let cleanupSync: (() => void) | null = null;
 
@@ -411,7 +413,7 @@ function MultiplayerRoomContent() {
       broadcastActionRef.current = null;
       if (cleanupSync) cleanupSync();
     };
-  }, [roomCode, localPlayer.id, startCountdownSequence, triggerHaptic]);
+  }, [roomCode, localPlayer.id, startCountdownSequence, triggerHaptic, isInitialized]);
 
   useEffect(() => {
     let active = true;
@@ -493,49 +495,52 @@ function MultiplayerRoomContent() {
     setExitModalOpen(true);
   };
 
+  const hasLeftRoomRef = useRef(false);
+
+  const leaveCurrentRoom = useCallback(async (options?: { keepalive?: boolean; broadcast?: boolean }) => {
+    if (hasLeftRoomRef.current) return true;
+    if (!roomState || roomState.status === 'finished' || roomState.status === 'closed') {
+      hasLeftRoomRef.current = true;
+      return true;
+    }
+    const isLobby = roomState.status === 'waiting';
+    const keepalive = Boolean(options?.keepalive);
+    const response = await fetch('/api/multiplayer/room', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: isLobby ? 'leave' : 'forfeit',
+        code: roomCode,
+        playerId: localPlayer.id,
+      }),
+      keepalive,
+    });
+    if (!keepalive) {
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Unable to leave the room.');
+    }
+    hasLeftRoomRef.current = true;
+    if (options?.broadcast !== false) {
+      if (isLobby) {
+        if (roomState?.hostId === localPlayer.id) {
+          broadcastActionRef.current?.('ROOM_CLOSED', { reason: 'Host closed the room' });
+        } else {
+          broadcastActionRef.current?.('PLAYER_LEFT', { playerId: localPlayer.id });
+        }
+      } else {
+        broadcastActionRef.current?.('PLAYER_FORFEIT', { playerId: localPlayer.id });
+      }
+    }
+    return true;
+  }, [localPlayer.id, roomCode, roomState]);
+
   const handleConfirmExit = async () => {
     setIsConfirmingExit(true);
     triggerHaptic('medium');
     let exited = false;
 
     try {
-      const isLobby = roomState?.status === 'waiting';
-
-      if (isLobby) {
-        // Leaving lobby
-        const response = await fetch('/api/multiplayer/room', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'leave',
-            code: roomCode,
-            playerId: localPlayer.id,
-          }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data.success) throw new Error(data.error || 'Unable to leave the room.');
-
-        if (isHost) {
-          broadcastActionRef.current?.('ROOM_CLOSED', { reason: 'Host closed the room' });
-        } else {
-          broadcastActionRef.current?.('PLAYER_LEFT', { playerId: localPlayer.id });
-        }
-      } else {
-        // Forfeiting active match
-        const response = await fetch('/api/multiplayer/room', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'forfeit',
-            code: roomCode,
-            playerId: localPlayer.id,
-          }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data.success) throw new Error(data.error || 'Unable to forfeit the match.');
-
-        broadcastActionRef.current?.('PLAYER_FORFEIT', { playerId: localPlayer.id });
-      }
+      await leaveCurrentRoom();
       exited = true;
     } catch (err) {
       console.error('Error during exit:', err);
@@ -546,6 +551,20 @@ function MultiplayerRoomContent() {
       if (exited) router.replace('/multiplayer');
     }
   };
+
+  useEffect(() => {
+    const onPopState = () => {
+      void leaveCurrentRoom({ keepalive: true, broadcast: true }).catch(() => {});
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [leaveCurrentRoom]);
+
+  useEffect(() => {
+    return setupBackButton(() => {
+      setExitModalOpen(true);
+    });
+  }, [setupBackButton]);
 
   // Generate deterministic puzzle pieces once room enters 'playing'
   useEffect(() => {

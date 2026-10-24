@@ -47,6 +47,33 @@ export function setRoomCapability(
   return true;
 }
 
+function expireCookie(response: NextResponse, name: string) {
+  response.cookies.set(name, '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 0,
+  });
+}
+
+export function clearRoomCapability(response: NextResponse, code: string) {
+  expireCookie(response, cookieName(code));
+}
+
+export function clearOtherRoomCapabilities(
+  request: NextRequest,
+  response: NextResponse,
+  exceptCode?: string
+) {
+  const keep = exceptCode ? cookieName(exceptCode) : null;
+  for (const cookie of request.cookies.getAll()) {
+    if (!cookie.name.startsWith('jigsaw_room_')) continue;
+    if (keep && cookie.name === keep) continue;
+    expireCookie(response, cookie.name);
+  }
+}
+
 export function getRoomCapability(request: NextRequest, code: string): RoomCapability | null {
   const token = request.cookies.get(cookieName(code))?.value;
   if (!token) return null;

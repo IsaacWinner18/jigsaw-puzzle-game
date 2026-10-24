@@ -13,7 +13,7 @@ import { getPlayerProfile, savePlayerName } from '@/lib/playerProfile';
 
 export default function MultiplayerSetupPage() {
   const router = useRouter();
-  const { student, triggerHaptic, startParam } = usePassizy();
+  const { student, triggerHaptic, startParam, isInitialized } = usePassizy();
   const [selectedPuzzle, setSelectedPuzzle] = useState<MultiplayerPuzzleTheme>(MULTIPLAYER_PUZZLES[0]);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [isCreating, setIsCreating] = useState(false);
@@ -74,6 +74,7 @@ export default function MultiplayerSetupPage() {
   };
 
   const handleCreateRoom = async () => {
+    if (!isInitialized) return;
     setIsCreating(true);
     setCreateError(null);
     triggerHaptic('medium');
@@ -277,7 +278,7 @@ export default function MultiplayerSetupPage() {
 
           <Button
             onClick={handleCreateRoom}
-            disabled={isCreating}
+            disabled={isCreating || !isInitialized}
             variant="amber"
             size="lg"
             className="gap-2 shrink-0 self-stretch sm:self-auto h-11 px-6 shadow-lg shadow-amber-500/15"
