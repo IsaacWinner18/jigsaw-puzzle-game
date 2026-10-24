@@ -94,6 +94,11 @@ export interface PassizySDK {
     get(): "light" | "dark";
     onChange(cb: (theme: "light" | "dark") => void): () => void;
   };
+  storage?: {
+    get<T = any>(key: string): Promise<T | null>;
+    set<T = any>(key: string, value: T): Promise<boolean>;
+    remove(key: string): Promise<boolean>;
+  };
   startParam?: string;
   appId?: string;
   getShareUrl(options?: { startParam?: string; appId?: string }): string;

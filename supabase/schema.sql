@@ -51,6 +51,16 @@ CREATE TABLE IF NOT EXISTS public.race_results (
     finished_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 4. USER CAMPAIGN PROGRESS TABLE
+-- Persists solo campaign level progress, unlocked milestones, and stars for students
+CREATE TABLE IF NOT EXISTS public.user_campaign_progress (
+    user_id TEXT PRIMARY KEY,
+    progress JSONB NOT NULL DEFAULT '{}'::jsonb,
+    total_stars INT NOT NULL DEFAULT 0,
+    highest_level INT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
 -- ==============================================================================
 -- INDEXES FOR HIGH-SPEED LOOKUPS
 -- ==============================================================================
@@ -137,6 +147,7 @@ CREATE TRIGGER enforce_room_capacity
 ALTER TABLE public.rooms ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.room_players ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.race_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_campaign_progress ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow public insert on rooms" ON public.rooms;
 DROP POLICY IF EXISTS "Allow public update on rooms" ON public.rooms;
@@ -144,6 +155,8 @@ DROP POLICY IF EXISTS "Allow public delete on rooms" ON public.rooms;
 DROP POLICY IF EXISTS "Allow public insert/update on room_players" ON public.room_players;
 DROP POLICY IF EXISTS "Allow public delete on room_players" ON public.room_players;
 DROP POLICY IF EXISTS "Allow public insert on race_results" ON public.race_results;
+DROP POLICY IF EXISTS "Allow public read on user_campaign_progress" ON public.user_campaign_progress;
+DROP POLICY IF EXISTS "Allow public insert/update on user_campaign_progress" ON public.user_campaign_progress;
 
 -- The browser may read room state, while all writes go through the server API
 -- using SUPABASE_SERVICE_ROLE_KEY.
@@ -164,11 +177,22 @@ CREATE POLICY "Allow public read on race_results"
     USING (true);
 
 
+-- Allow public progress reads and writes
+CREATE POLICY "Allow public read on user_campaign_progress" 
+    ON public.user_campaign_progress FOR SELECT 
+    USING (true);
+
+CREATE POLICY "Allow public insert/update on user_campaign_progress" 
+    ON public.user_campaign_progress FOR ALL 
+    USING (true)
+    WITH CHECK (true);
+
+
 -- ==============================================================================
 -- REALTIME REPLICATION (CRITICAL FOR LIVE LOBBY & RACE SYNC)
 -- ==============================================================================
 -- Enables instant broadcasts to all connected clients when rows change
 BEGIN;
   DROP PUBLICATION IF EXISTS supabase_realtime;
-  CREATE PUBLICATION supabase_realtime FOR TABLE public.rooms, public.room_players, public.race_results;
+  CREATE PUBLICATION supabase_realtime FOR TABLE public.rooms, public.room_players, public.race_results, public.user_campaign_progress;
 COMMIT;

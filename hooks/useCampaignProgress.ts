@@ -1,12 +1,14 @@
 'use client';
 
-import { useSyncExternalStore, useCallback } from 'react';
+import { useSyncExternalStore, useCallback, useEffect } from 'react';
 import { LevelProgress } from '@/types/puzzle';
 import {
   getStoredProgress,
   saveLevelResult as saveStoredResult,
   getTotalEarnedStars,
+  syncCloudProgress,
 } from '@/lib/storage';
+import { usePassizy } from '@/hooks/usePassizy';
 
 const STORAGE_EVENT = 'jigsaw_storage_update';
 function notifyStorageChange() {
@@ -25,11 +27,12 @@ function subscribe(callback: () => void) {
   };
 }
 
+let activeStudentId: string | null = null;
 let cachedProgressStr = '';
 let cachedProgressObj: Record<number, LevelProgress> = {};
 
 function getProgressSnapshot(): Record<number, LevelProgress> {
-  const current = getStoredProgress();
+  const current = getStoredProgress(activeStudentId);
   const str = JSON.stringify(current);
   if (str !== cachedProgressStr) {
     cachedProgressStr = str;
@@ -38,9 +41,42 @@ function getProgressSnapshot(): Record<number, LevelProgress> {
   return cachedProgressObj;
 }
 
+function getTotalStarsSnapshot(): number {
+  return getTotalEarnedStars(activeStudentId);
+}
+
 const emptyProgress: Record<number, LevelProgress> = {};
 
 export function useCampaignProgress(totalLevels: number) {
+  const { student } = usePassizy();
+  const currentStudentId = student?.id || null;
+
+  // Sync active student ID with module-level storage reader
+  if (activeStudentId !== currentStudentId) {
+    activeStudentId = currentStudentId;
+    cachedProgressStr = '';
+  }
+
+  // Initial and reactive cloud synchronization
+  useEffect(() => {
+    let isCancelled = false;
+    activeStudentId = currentStudentId;
+
+    syncCloudProgress(currentStudentId)
+      .then(() => {
+        if (!isCancelled) {
+          notifyStorageChange();
+        }
+      })
+      .catch((err) => {
+        console.warn('[CampaignProgress] Cloud sync notice:', err);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentStudentId]);
+
   const campaignProgress = useSyncExternalStore(
     subscribe,
     getProgressSnapshot,
@@ -49,17 +85,17 @@ export function useCampaignProgress(totalLevels: number) {
 
   const totalStars = useSyncExternalStore(
     subscribe,
-    getTotalEarnedStars,
+    getTotalStarsSnapshot,
     () => 0
   );
 
   const recordLevelCompletion = useCallback(
     (levelId: number, timeElapsed: number, moves: number, stars: number) => {
-      const res = saveStoredResult(levelId, timeElapsed, moves, stars, totalLevels);
+      const res = saveStoredResult(levelId, timeElapsed, moves, stars, totalLevels, currentStudentId);
       notifyStorageChange();
       return res;
     },
-    [totalLevels]
+    [totalLevels, currentStudentId]
   );
 
   return {
