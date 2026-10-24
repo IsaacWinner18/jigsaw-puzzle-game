@@ -123,7 +123,7 @@ function PlayGameContent() {
     if (hasNextLevel) {
       router.push(`/play/${currentLevel.id + 1}`);
     } else {
-      router.push('/solo');
+      router.replace('/solo');
     }
   };
 
@@ -134,7 +134,7 @@ function PlayGameContent() {
   };
 
   const handleReturnToLevels = () => {
-    router.push('/solo');
+    router.replace('/solo');
   };
 
   const isLevel5Plus = currentLevel ? currentLevel.id >= 5 : false;
