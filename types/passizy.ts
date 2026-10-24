@@ -13,6 +13,7 @@ export interface StudentProfile {
 }
 
 export interface InitOptions {
+  appId?: string;
   onThemeChange?: (theme: "light" | "dark") => void;
   onPause?: () => void;
   onResume?: () => void;
@@ -94,6 +95,7 @@ export interface PassizySDK {
     onChange(cb: (theme: "light" | "dark") => void): () => void;
   };
   startParam?: string;
+  appId?: string;
   getShareUrl(options?: { startParam?: string; appId?: string }): string;
   share(options?: ShareOptions): Promise<boolean>;
   onDeepLink(cb: (startParam: string) => void): () => void;

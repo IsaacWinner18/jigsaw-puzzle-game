@@ -154,30 +154,38 @@ export function usePassizy() {
 
   const getShareUrl = useCallback(
     (options?: { startParam?: string; appId?: string }) => {
-      const opts = { appId: 'jigsaw', ...options };
       if (typeof window !== 'undefined' && window.Passizy?.getShareUrl) {
-        return window.Passizy.getShareUrl(opts);
+        return window.Passizy.getShareUrl(options);
       }
       const origin = typeof window !== 'undefined' ? window.location.origin : 'https://passizy.com';
-      const param = opts.startParam || startParam;
-      return param ? `${origin}/me/games/jigsaw?startapp=${encodeURIComponent(param)}` : `${origin}/me/games/jigsaw`;
+      const resolvedAppId =
+        options?.appId ||
+        session?.appId ||
+        (typeof window !== 'undefined'
+          ? new URLSearchParams(window.location.search).get('app_id') ||
+            new URLSearchParams(window.location.search).get('appId')
+          : null);
+      const basePath = resolvedAppId ? `${origin}/me/games/${resolvedAppId}` : origin;
+      const param = options?.startParam || startParam;
+      return param ? `${basePath}?startapp=${encodeURIComponent(param)}` : basePath;
     },
-    [startParam]
+    [session, startParam]
   );
 
   const share = useCallback(
     async (options?: { startParam?: string; appId?: string; title?: string; text?: string; url?: string }) => {
-      const opts = { appId: 'jigsaw', ...options };
       if (typeof window !== 'undefined' && window.Passizy?.share) {
-        return window.Passizy.share(opts);
+        return window.Passizy.share(options);
       }
       // Fallback
-      const shareUrl = opts.url || getShareUrl(opts);
+      const shareUrl = options?.url || getShareUrl(options);
+      const title = options?.title || (typeof document !== 'undefined' ? document.title : 'Passizy');
+      const text = options?.text || 'Play on Passizy';
       if (typeof navigator !== 'undefined' && navigator.share) {
         try {
           await navigator.share({
-            title: opts.title || 'Jigsaw Atelier on Passizy',
-            text: opts.text || 'Play Jigsaw Atelier on Passizy',
+            title,
+            text,
             url: shareUrl,
           });
           return true;
